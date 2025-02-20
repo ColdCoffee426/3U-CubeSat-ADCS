@@ -1,23 +1,20 @@
-%% sensor_visualization.,
-% This script connects to a sensor server via TCP/IP and visualizes csv
-% readings
-
+%% sensor_visualization.m
+%n This scripts used tcp to read csv and then display graphs 
 % Accelerometer values (in g) are converted to m/s^2 (1 g = 9.80665 m/s^2).
 % The top subplots display accelerometer channels in m/s^2 (fixed range: [-5,5]),
 % and the bottom subplots display gyroscope channels in °/s (fixed range: [-25,25]).
-%
-% This code uses the legacy tcpip object available in MATLAB 2018a.
+
 
 %% Setup TCP/IP connection
-ipAddress = '192.168.219.166';  % Update with your sensor server's IP address
-port = 5000;                    % Update with your sensor server's port number
+ipAddress = '192.168.219.166';  % ip addres of raspberry pi
+port = 5001;                    % port number in script
 t = tcpip(ipAddress, port, 'NetworkRole', 'client');
 t.Terminator = 'LF';  % Data strings are terminated by a linefeed
 t.Timeout = 10;       % Timeout (in seconds)
 fopen(t);
 disp('TCP/IP connection established.');
 
-%% Setup history buffers and parameters
+%% history buffers
 historyLength = 200;
 historyAx = zeros(1, historyLength);
 historyAy = zeros(1, historyLength);
@@ -27,9 +24,9 @@ historyGy = zeros(1, historyLength);
 historyGz = zeros(1, historyLength);
 historyIndex = 1; % Circular buffer index
 
-%% Create figure and subplots
-figure('Name','Sensor Visualization','NumberTitle','off',...
-       'Position',[100 100 1300 800]);
+
+%% Figers and subplots
+figure('Name','Sensor Visualization','NumberTitle','off','Position',[100 100 1300 800]);
 
 % one row for accelerometer with fixed range
 ax1 = subplot(2,3,1);
@@ -98,7 +95,7 @@ while true
             axVal = vals(1) 
             ayVal = vals(2) 
             azVal = vals(3) 
-            % Gyroscope values remain in °/s
+            % Gyroscope values in °/s
             gxVal = vals(4);
             gyVal = vals(5);
             gzVal = vals(6);
