@@ -74,7 +74,7 @@ This repository contains the code and hardware documentation for our “Nano Cub
 - **Noisy or Unstable Readings** – Adjust complementary filter constants or PID gains. Hardware damping or isolation for the IMU may be beneficial.
 
 ## References
-- **Project Report** – Found in `Docs/FYP-Report`.  
+- **Project Report** – Found in `Report`.  
 - Bukhari, M.Q. & Gul, P. (2025). *Nano CubeSat Kit*, Institute of Space Technology, Islamabad.
 
 ## Contact
