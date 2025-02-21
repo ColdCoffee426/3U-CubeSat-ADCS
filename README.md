@@ -1,4 +1,4 @@
-# Nano CubeSat Kit – 3U CubeSat ADCS
+# 3U CubeSat ADCS
 
 **Authors**  
 - Muhammad Qasim Bukhari (EE-20A-210401068)  
