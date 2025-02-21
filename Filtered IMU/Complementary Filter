@@ -1,0 +1,159 @@
+import smbus
+import time
+import socket
+import math
+
+# -------------------------------
+# Enhanced MPU6050 Class
+# -------------------------------
+class MPU6050:
+    GRAVITY_MS2 = 9.80665
+    address = None
+    bus = None
+
+    # Scale Modifiers
+    ACCEL_SCALE_MODIFIERS = [16384.0, 8192.0, 4096.0, 2048.0]  # 2g, 4g, 8g, 16g
+    GYRO_SCALE_MODIFIERS = [131.0, 65.5, 32.8, 16.4]  # 250, 500, 1000, 2000   /s
+
+    # MPU-6050 Registers
+    PWR_MGMT_1 = 0x6B
+    CONFIG = 0x1A
+    GYRO_CONFIG = 0x1B
+    ACCEL_CONFIG = 0x1C
+
+    ACCEL_XOUT = 0x3B
+    TEMP_OUT = 0x41
+    GYRO_XOUT = 0x43
+
+    def __init__(self, address=0x68, bus=1):
+        self.address = address
+        self.bus = smbus.SMBus(bus)
+        self.wake()
+        self.set_accel_range(0x00)  #   2g default
+        self.set_gyro_range(0x00)    #   250  /s default
+
+    def wake(self):
+        self.bus.write_byte_data(self.address, self.PWR_MGMT_1, 0x00)
+        self.bus.write_byte_data(self.address, self.CONFIG, 0x01)  # 184Hz LPF
+
+    def set_accel_range(self, range_val):
+        self.bus.write_byte_data(self.address, self.ACCEL_CONFIG, range_val)
+
+    def set_gyro_range(self, range_val):
+        self.bus.write_byte_data(self.address, self.GYRO_CONFIG, range_val)
+
+    def read_word(self, reg):
+        high = self.bus.read_byte_data(self.address, reg)
+        low = self.bus.read_byte_data(self.address, reg+1)
+        value = (high << 8) + low
+        return value if value < 32768 else value - 65536
+
+    def get_accel_data(self):
+        scale = self.ACCEL_SCALE_MODIFIERS[0]  # Assuming   2g range
+        return {
+            'x': self.read_word(self.ACCEL_XOUT) / scale * self.GRAVITY_MS2,
+            'y': self.read_word(self.ACCEL_XOUT+2) / scale * self.GRAVITY_MS2,
+            'z': self.read_word(self.ACCEL_XOUT+4) / scale * self.GRAVITY_MS2
+        }
+def get_gyro_data(self):
+        scale = self.GYRO_SCALE_MODIFIERS[0]  # Assuming   250  /s range
+        return {
+            'x': self.read_word(self.GYRO_XOUT) / scale,
+            'y': self.read_word(self.GYRO_XOUT+2) / scale,
+            'z': self.read_word(self.GYRO_XOUT+4) / scale
+        }
+
+# -------------------------------
+# Sensor Fusion and Control
+# -------------------------------
+class AttitudeEstimator:
+    def __init__(self, alpha=0.98):
+        self.alpha = alpha
+        self.angle_x = 0.0
+        self.angle_y = 0.0
+        self.prev_time = time.time()
+        
+        # Calibration offsets
+        self.accel_offset = {'x': 0, 'y': 0, 'z': 0}
+        self.gyro_bias = {'x': 0, 'y': 0, 'z': 0}
+
+    def calibrate(self, mpu, samples=500):
+        print("Calibrating... Keep sensor stationary")
+        accel_sum = {'x': 0, 'y': 0, 'z': 0}
+        gyro_sum = {'x': 0, 'y': 0, 'z': 0}
+
+        for _ in range(samples):
+            accel = mpu.get_accel_data()
+            gyro = mpu.get_gyro_data()
+            
+            for axis in ['x', 'y', 'z']:
+                accel_sum[axis] += accel[axis]
+                gyro_sum[axis] += gyro[axis]
+            time.sleep(0.002)
+
+        for axis in ['x', 'y', 'z']:
+            self.accel_offset[axis] = accel_sum[axis] / samples
+            self.gyro_bias[axis] = gyro_sum[axis] / samples
+
+        print(f"Accel Offsets: {self.accel_offset}")
+        print(f"Gyro Biases: {self.gyro_bias}")
+
+    def update(self, mpu):
+        # Get raw measurements
+		raw_accel = mpu.get_accel_data()
+        raw_gyro = mpu.get_gyro_data()
+        
+        # Apply calibration
+        accel = {k: raw_accel[k] - self.accel_offset[k] for k in raw_accel}
+        gyro = {k: raw_gyro[k] - self.gyro_bias[k] for k in raw_gyro}
+
+        # Calculate delta time
+        now = time.time()
+        dt = now - self.prev_time
+        self.prev_time = now
+
+        # Calculate accelerometer angles
+        accel_angle_x = math.degrees(math.atan2(accel['y'], accel['z']))
+        accel_angle_y = math.degrees(math.atan2(accel['x'], accel['z']))
+
+        # Apply complementary filter
+        self.angle_x = self.alpha * (self.angle_x + gyro['x'] * dt) + 
+                      (1 - self.alpha) * accel_angle_x
+        self.angle_y = self.alpha * (self.angle_y + gyro['y'] * dt) + 
+                      (1 - self.alpha) * accel_angle_y
+
+        return self.angle_x, self.angle_y
+
+# -------------------------------
+# Main Application
+# -------------------------------
+def sensor_server():
+    mpu = MPU6050()
+    estimator = AttitudeEstimator(alpha=0.98)  # Tuned value
+    estimator.calibrate(mpu)
+
+    # Networking setup
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(('', 5000))
+    server.listen(1)
+    conn, addr = server.accept()
+
+    try:
+        while True:
+            roll, pitch = estimator.update(mpu)
+            # Apply moving average filter
+            data_str = f"{roll:.4f},{pitch:.4f}\n"
+            conn.sendall(data_str.encode())
+            time.sleep(0.02)  # 50Hz update rate
+
+    except (KeyboardInterrupt, ConnectionResetError):
+        conn.close()
+        server.close()
+
+if __name__ == "__main__":
+        while True:
+                try:
+                    sensor_server()
+                except KeyboardInterrupt:
+                        break
