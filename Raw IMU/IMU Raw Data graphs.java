@@ -1,3 +1,4 @@
+//save this file as a .pde to run in processing
 import processing.net.*;
 
 Client myClient;
