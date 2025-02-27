@@ -40,7 +40,7 @@ This repository contains the code and hardware documentation for our “Nano Cub
    sudo apt-get install python3-pip
    pip3 install smbus RPi.GPIO
    ```
-   *(Add any additional libraries here, e.g., matplotlib, numpy, etc., if needed.)*
+ 
 
 4. **Initial Tests**  
    - **GPIO / LED**  
