@@ -1,0 +1,224 @@
+#include <Wire.h>
+
+// Motor Connections (L298N)
+#define YAW_ENA    9    // PWM for yaw control (gyro Z)
+#define YAW_IN1    8
+#define YAW_IN2    7
+#define PITCH_ENB  10   // PWM for pitch control (accel/gyro Y)
+#define PITCH_IN3  12
+#define PITCH_IN4  11
+
+#define LED_PIN    2    // LED during calibration
+
+// MPU-6500 I2C address/registers
+#define MPU_ADDR        0x68
+#define PWR_MGMT_1      0x6B
+#define ACCEL_XOUT_H    0x3B
+
+// Raw sensor reads
+int16_t rawAccX, rawAccY, rawAccZ;
+int16_t rawGyroX, rawGyroY, rawGyroZ;
+
+// Bias offsets (raw)
+float accOffsetX, accOffsetY, accOffsetZ;
+float gyroOffsetX, gyroOffsetY, gyroOffsetZ;
+
+// Scaled sensor values
+float accX, accY, accZ;
+float gyroX, gyroY, gyroZ;
+
+// Filtered angles
+float pitch = 0, roll = 0, yaw = 0;
+float pitch_offset = 0, roll_offset = 0, yaw_offset = 0;
+
+// PID gains
+#define KP_PITCH  8.0f
+#define KI_PITCH   0.0f
+#define KD_PITCH  20.0f
+
+#define KP_YAW     8.0f
+#define KI_YAW     0.0f
+#define KD_YAW    15.0f
+
+// PID state
+float prev_pitch_error = 0;
+float prev_yaw_error   = 0;
+
+// Timing
+unsigned long prev_time;
+float dt;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+
+  // LED on while calibrating
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);
+
+  // Motor pins
+  pinMode(YAW_ENA,   OUTPUT);
+  pinMode(YAW_IN1,   OUTPUT);
+  pinMode(YAW_IN2,   OUTPUT);
+  pinMode(PITCH_ENB, OUTPUT);
+  pinMode(PITCH_IN3, OUTPUT);
+  pinMode(PITCH_IN4, OUTPUT);
+
+  // Wake & configure MPU-6500
+  Wire.beginTransmission(MPU_ADDR);
+    Wire.write(PWR_MGMT_1);
+    Wire.write(0x00);  // exit sleep
+  Wire.endTransmission(true);
+  // ±4g accel
+  Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x1C); Wire.write(0x08);
+  Wire.endTransmission(true);
+  // ±500°/s gyro
+  Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x1B); Wire.write(0x08);
+  Wire.endTransmission(true);
+
+  delay(100);
+
+  calibrateSensor();  // raw bias
+  calibrateIMU();     // orientation zeroing
+
+  digitalWrite(LED_PIN, LOW);
+  prev_time = millis();
+}
+
+void loop() {
+  // compute dt
+  unsigned long now = millis();
+  dt = (now - prev_time) / 1000.0f;
+  prev_time = now;
+
+  readRawMPU();
+
+  // subtract biases & scale
+  accX  = (rawAccX  - accOffsetX) / 8192.0f;   // 4g → 8192 LSB/g
+  accY  = (rawAccY  - accOffsetY) / 8192.0f;
+  accZ  = (rawAccZ  - accOffsetZ) / 8192.0f;
+  gyroX = (rawGyroX - gyroOffsetX) / 65.5f;    // 500°/s → 65.5 LSB/°/s
+  gyroY = (rawGyroY - gyroOffsetY) / 65.5f;
+  gyroZ = (rawGyroZ - gyroOffsetZ) / 65.5f;
+
+  calculateAngles();  // complementary filter
+
+  // PID errors
+  float pitch_error = pitch - pitch_offset;
+  float yaw_error   = yaw   - yaw_offset;
+
+  // PID outputs (P + D only)
+  float pitch_out = KP_PITCH * pitch_error
+                  + KD_PITCH * (pitch_error - prev_pitch_error) / dt;
+  float yaw_out   = KP_YAW   * yaw_error
+                  + KD_YAW   * (yaw_error   - prev_yaw_error)   / dt;
+
+  prev_pitch_error = pitch_error;
+  prev_yaw_error   = yaw_error;
+
+  controlPitchMotor(pitch_out);
+  controlYawMotor(  yaw_out);
+
+  // Debug
+  Serial.print("Pitch_err:"); Serial.print(pitch_error, 1);
+  Serial.print("° Yaw_err:");  Serial.print(yaw_error,   1);
+  Serial.print("° P_out:");    Serial.print(pitch_out);
+  Serial.print(" Y_out:");      Serial.println(yaw_out);
+
+  delay(5);
+}
+
+void calibrateSensor() {
+  const int samples = 500;
+  long sumAX=0, sumAY=0, sumAZ=0;
+  long sumGX=0, sumGY=0, sumGZ=0;
+
+  for (int i = 0; i < samples; i++) {
+    readRawMPU();
+    sumAX += rawAccX; sumAY += rawAccY; sumAZ += rawAccZ;
+    sumGX += rawGyroX;sumGY += rawGyroY;sumGZ += rawGyroZ;
+    delay(5);
+  }
+  accOffsetX  = sumAX / float(samples);
+  accOffsetY  = sumAY / float(samples);
+  accOffsetZ  = sumAZ / float(samples);
+  gyroOffsetX = sumGX / float(samples);
+  gyroOffsetY = sumGY / float(samples);
+  gyroOffsetZ = sumGZ / float(samples);
+
+  Serial.println("Raw calibration done");
+}
+
+void readRawMPU() {
+  Wire.beginTransmission(MPU_ADDR);
+    Wire.write(ACCEL_XOUT_H);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_ADDR, 14, true);
+
+  rawAccX  = (Wire.read() << 8) | Wire.read();
+  rawAccY  = (Wire.read() << 8) | Wire.read();
+  rawAccZ  = (Wire.read() << 8) | Wire.read();
+  Wire.read(); Wire.read();  // discard temp
+  rawGyroX = (Wire.read() << 8) | Wire.read();
+  rawGyroY = (Wire.read() << 8) | Wire.read();
+  rawGyroZ = (Wire.read() << 8) | Wire.read();
+}
+
+void calculateAngles() {
+  float acc_pitch = atan2(-accY, sqrt(accX*accX + accZ*accZ)) * 180.0f/PI;
+  float acc_roll  = atan2(accX,  accZ)               * 180.0f/PI;
+
+  // integrate gyro
+  pitch += gyroY * dt;
+  roll  += gyroX * dt;
+  yaw   += gyroZ * dt;  // Z→yaw when MPU is flat
+
+  // complementary filter
+  pitch = 0.96f * pitch + 0.04f * acc_pitch;
+  roll  = 0.96f * roll  + 0.04f * acc_roll;
+}
+
+void controlPitchMotor(float out) {
+  int pwm = constrain(abs(out), 0, 255);
+  analogWrite(PITCH_ENB, pwm);
+  digitalWrite(PITCH_IN3, out > 0 ? HIGH : LOW);
+  digitalWrite(PITCH_IN4, out > 0 ? LOW  : HIGH);
+}
+
+void controlYawMotor(float out) {
+  int pwm = constrain(abs(out), 0, 255);
+  analogWrite(YAW_ENA, pwm);
+  digitalWrite(YAW_IN1, out > 0 ? HIGH : LOW);
+  digitalWrite(YAW_IN2, out > 0 ? LOW  : HIGH);
+}
+
+void calibrateIMU() {
+  Serial.println("Orient. calibration; keep MPU flat");
+  const int samples = 200;
+  float sumP = 0, sumR = 0;
+
+  for (int i = 0; i < samples; i++) {
+    // use last raw & scaled reads
+    float sx = (rawAccX - accOffsetX) / 8192.0f;
+    float sy = (rawAccY - accOffsetY) / 8192.0f;
+    float sz = (rawAccZ - accOffsetZ) / 8192.0f;
+
+    sumP += atan2(-sy, sqrt(sx*sx + sz*sz)) * 180.0f/PI;
+    sumR += atan2( sx,          sz         ) * 180.0f/PI;
+    delay(10);
+  }
+  pitch_offset = sumP / samples;
+  roll_offset  = sumR / samples;
+  yaw_offset   = 0;
+
+  // blink LED 3×
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_PIN, LOW);
+    delay(250);
+    digitalWrite(LED_PIN, HIGH);
+    delay(250);
+  }
+  Serial.println("Orientation calibration done");
+}
